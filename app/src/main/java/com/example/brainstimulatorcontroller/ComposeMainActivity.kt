@@ -33,90 +33,111 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.core.content.ContextCompat
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.le.BluetoothLeScanner
+import android.os.Looper
 
 
 class ComposeMainActivity : ComponentActivity() {
-    @RequiresApi(Build.VERSION_CODES.S)
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private val btPermissions = arrayOf(
-        Manifest.permission.BLUETOOTH_SCAN,
-        Manifest.permission.BLUETOOTH_CONNECT
-    )
-
+    private lateinit var bluetoothManager: BluetoothManager
+    private var bluetoothAdapter: BluetoothAdapter? = null
+    private val bluetoothLeScanner: BluetoothLeScanner?
+    get() = bluetoothAdapter?.bluetoothLeScanner
     // checks if bluetooth is enabled on device
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 🔹 1. Get the Bluetooth manager and adapter
+        // Initializes the bluetooth adaptors
+        bluetoothManager = getSystemService(BluetoothManager::class.java)
+        bluetoothAdapter = bluetoothManager.adapter
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permLauncher.launch(btPerms)
+        } else {
+            afterPermissionsGranted()
+        }
+    }
 
-        // Check if the device supports Bluetooth
-        if (bluetoothAdapter == null) {
-            // Device doesn’t support Bluetooth
+    @RequiresApi(Build.VERSION_CODES.S)
+    private val btPerms = arrayOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_CONNECT
+    )
+
+    private val permLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            val allGranted = results.values.all { it }
+            if (allGranted) {
+                afterPermissionsGranted()
+            } else {
+                Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_LONG).show()
+                finish()
+            }
+        }
+
+    private val enableBluetoothLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            // Regardless of result, continue to UI
+            setContent { SampleApp() }
+        }
+
+    /** Run AFTER runtime permissions are granted */
+    private fun afterPermissionsGranted() {
+        val adapter = bluetoothAdapter
+        if (adapter == null) {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_LONG).show()
-            finish() // close app
+            finish()
             return
         }
 
-        // Ensure Bluetooth is enabled
-        if (!bluetoothAdapter.isEnabled) {
-            // Prompt user to enable it
-            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(enableBtIntent)
+        // Safe to read isEnabled now
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || adapter.isEnabled) {
+            setContent { SampleApp() }
+        } else {
+            // Show system dialog to enable Bluetooth
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBluetoothLauncher.launch(intent)
         }
-        val bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner
-        var scanning = false
-        setContent {
-            SampleApp()
-        }
-
     }
-
-    private val bluetoothManager: BluetoothManager =
-        getSystemService(BluetoothManager::class.java)
-    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    private val enableBluetoothLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                Toast.makeText(this, "Bluetooth enabled", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Bluetooth not enabled", Toast.LENGTH_SHORT).show()
-            }
-        }
-    private val bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
     private var scanning = false
-    private val handler = Handler()
+    private val handler = Handler(Looper.getMainLooper())
     private val SCAN_PERIOD: Long = 10000
     private fun scanLeDevice() {
-        if (!scanning) { // Stops scanning after a pre-defined scan period.
+        if (!scanning) {
+            // stop after SCAN_PERIOD
             handler.postDelayed({
                 scanning = false
-                bluetoothLeScanner.stopScan(leScanCallback)
+                stopScanSafe()
             }, SCAN_PERIOD)
+
             scanning = true
-            bluetoothLeScanner.startScan(leScanCallback)
+            startScanSafe()
         } else {
             scanning = false
-            bluetoothLeScanner.stopScan(leScanCallback)
+            stopScanSafe()
         }
     }
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun hasBtPermissions(): Boolean =
-        btPermissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-    @RequiresApi(Build.VERSION_CODES.S)
+    private fun hasBtPermissions(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ).all { perm ->
+                ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+            }
+        } else true
+    }
+
     @SuppressLint("MissingPermission")
     private fun startScanSafe() {
-        if (!hasBtPermissions()) return
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: return
-        scanner.startScan(leScanCallback)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBtPermissions()) return
+        bluetoothLeScanner?.startScan(leScanCallback)
     }
-    @RequiresApi(Build.VERSION_CODES.S)
+
     @SuppressLint("MissingPermission")
     private fun stopScanSafe() {
-        if (!hasBtPermissions()) return
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: return
-        scanner.stopScan(leScanCallback)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBtPermissions()) return
+        bluetoothLeScanner?.stopScan(leScanCallback)
     }
     private val leDeviceListAdapter = LeDeviceListAdapter()
 
@@ -127,10 +148,26 @@ class ComposeMainActivity : ComponentActivity() {
             leDeviceListAdapter.addDevice(result.device)
             leDeviceListAdapter.notifyDataSetChanged()
         }
-
-
+    }
+    private class LeDeviceListAdapter {
+        private val devices = mutableListOf<BluetoothDevice>()
+        fun addDevice(device: BluetoothDevice) {
+            if (devices.none { it.address == device.address }) devices.add(device)
+        }
+        fun notifyDataSetChanged() { /* no-op for now */ }
+        fun getDevices(): List<BluetoothDevice> = devices
     }
 
+    // function to enable bluetooth
+    private fun promptEnableBluetooth() {
+        val adapter = bluetoothAdapter
+        if (adapter != null && !adapter.isEnabled) {
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBluetoothLauncher.launch(intent)
+        } else {
+            Toast.makeText(this, "Bluetooth is already enabled", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable // UI building block to show the title of the application
@@ -188,7 +225,7 @@ class ComposeMainActivity : ComponentActivity() {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
             }
-
+            // current slider
             Column {
                 Text("Current (mA): ${"%.1f".format(currentMA)}")
                 Slider(
@@ -217,6 +254,9 @@ class ComposeMainActivity : ComponentActivity() {
             }
 
             Divider()
+            Button(onClick = { promptEnableBluetooth() }) {
+                Text("Enable Bluetooth")
+            }
 
             Text("Log", style = MaterialTheme.typography.titleMedium)
             LazyColumn(
