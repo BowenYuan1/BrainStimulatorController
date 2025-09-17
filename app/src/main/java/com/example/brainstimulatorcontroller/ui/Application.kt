@@ -100,6 +100,8 @@ fun AppContent(
         ) {
             items(devices) { dev ->
                 ElevatedCard {
+                    val name = dev.name ?: "(Unnamed)"
+                    Text("$name\n${dev.address}")
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(dev.address, style = MaterialTheme.typography.bodySmall)
                     }

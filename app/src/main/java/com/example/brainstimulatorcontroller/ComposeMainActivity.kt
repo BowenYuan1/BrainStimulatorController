@@ -13,13 +13,16 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import com.example.brainstimulatorcontroller.ui.Application
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.android.awaitFrame
 import java.util.*
 
@@ -72,17 +75,22 @@ class ComposeMainActivity : ComponentActivity() {
     private val SCAN_PERIOD_MS = 10_000L
 
 
-    private val devices = mutableStateListOf<BluetoothDevice>()
+    private var devices = mutableStateListOf<BluetoothDevice>()
 
     private var bluetoothGatt: BluetoothGatt? = null
     private val gattCallback = object : BluetoothGattCallback() { /* add when ready */ }
 
     private val leScanCallback = object : ScanCallback() {
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val dev = result.device ?: return
-            if (dev.address.isNullOrBlank()) return
-            if (devices.none { it.address == dev.address }) {
-                runOnUiThread { devices.add(dev) }
+            super.onScanResult(callbackType, result)
+            val device = result.device
+            val name = device.name ?: "(Unnamed)"
+            val addr = device.address
+            Log.d("BLE_SCAN", "Found device: $name [$addr]")
+            if (devices.none { it.address == addr }) {
+                devices =
+                    (devices + device) as SnapshotStateList<BluetoothDevice>  // assuming `devices` is your state list
             }
         }
     }
