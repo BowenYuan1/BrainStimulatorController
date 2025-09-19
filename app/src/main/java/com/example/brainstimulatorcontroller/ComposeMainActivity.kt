@@ -80,6 +80,7 @@ class ComposeMainActivity : ComponentActivity() {
     private var bluetoothGatt: BluetoothGatt? = null
     private val gattCallback = object : BluetoothGattCallback() { /* add when ready */ }
 
+    // Taking scan result and assigning information to it
     private val leScanCallback = object : ScanCallback() {
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -90,12 +91,10 @@ class ComposeMainActivity : ComponentActivity() {
             Log.d("BLE_SCAN", "Found device: $name [$addr]")
             if (devices.none { it.address == addr }) {
                 devices =
-                    (devices + device) as SnapshotStateList<BluetoothDevice>  // assuming `devices` is your state list
+                    (devices + device) as SnapshotStateList<BluetoothDevice> // casting to log device
             }
         }
     }
-
-    // ---------------- Lifecycle ----------------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -110,6 +109,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    // App startup after required perms have been granted.
     private fun afterPermissionsGranted() {
         val adapter = bluetoothAdapter
         if (adapter == null) {
@@ -129,7 +129,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
-    // ---------------- BLE helpers ----------------
+    // BLE helpers
     private fun promptEnableBluetooth() {
         val adapter = bluetoothAdapter
         if (adapter != null && !adapter.isEnabled) {
