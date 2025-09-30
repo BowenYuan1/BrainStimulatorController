@@ -2,13 +2,10 @@ package com.example.brainstimulatorcontroller
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.bluetooth.*
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings.CALLBACK_TYPE_ALL_MATCHES
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -19,11 +16,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
+import androidx.compose.runtime.mutableStateListOf
 import androidx.core.content.ContextCompat
 import com.example.brainstimulatorcontroller.ui.Application
-import androidx.compose.runtime.mutableStateListOf
-import kotlinx.coroutines.android.awaitFrame
-import java.util.*
+
+// ---- New: lightweight row model for the UI ----
+data class DeviceRow(
+    val name: String,
+    val address: String
+)
 
 class ComposeMainActivity : ComponentActivity() {
 
@@ -36,13 +37,12 @@ class ComposeMainActivity : ComponentActivity() {
     private companion object { const val TAG = "BT_SCAN" }
 
     private fun addLog(msg: String) = android.util.Log.d(TAG, msg)
-
     private fun hasPerm(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
     private val btPerms = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
         Manifest.permission.BLUETOOTH_CONNECT
-        // Add ACCESS_FINE_LOCATION if needed for some devices
     )
 
     private fun hasBtPermissions(): Boolean {
@@ -65,40 +65,61 @@ class ComposeMainActivity : ComponentActivity() {
 
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
-            // Continue to UI either way, user can enable later
-            setContent { Application(
-                devices = devices,
-                onEnableBt = { promptEnableBluetooth() },
-                onScanToggle = { scanLeDevice() }
-            ) }
+            setContent {
+                Application(
+                    devices = deviceRows,               // <-- pass rows with names
+                    onEnableBt = { promptEnableBluetooth() },
+                    onScanToggle = { scanLeDevice() }
+                )
+            }
         }
 
-    // Scan state and list exposed to UI
+    // Scan state / timing
     private var scanning = false
     private val handler = Handler(Looper.getMainLooper())
     private val SCAN_PERIOD_MS = 10_000L
 
-
-    private val devices = mutableStateListOf<BluetoothDevice>()
+    // expose DeviceRow to UI instead of raw BluetoothDevice
+    private val deviceRows = mutableStateListOf<DeviceRow>()
 
     private var bluetoothGatt: BluetoothGatt? = null
-    private val gattCallback = object : BluetoothGattCallback() { /* add when ready */ }
+    //private val gattCallback = object : BluetoothGattCallback() {  }
 
     private val leScanCallback = object : ScanCallback() {
+
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val dev = result.device ?: return
-            val name = result.scanRecord?.deviceName ?: dev.name ?: "(Unnamed)"
-            val addr = runCatching { dev.address }.getOrElse { "NoAddr(perm?)" }
-            addLog("onScanResult: rssi=${result.rssi} $name $addr")
 
+            // Prefer advertised name then device.name else "(Unnamed)"
+            val advName = result.scanRecord?.deviceName
+            val safeName = advName ?: dev.name ?: "(Unnamed)"
 
-            val already = if (addr.startsWith("NoAddr")) {
-                devices.any { System.identityHashCode(it) == System.identityHashCode(dev) }
-            } else {
-                devices.any { runCatching { it.address }.getOrNull() == addr }
+            val safeAddr = runCatching { dev.address }.getOrElse { "Permission required" }
+
+            addLog("onScanResult: rssi=${result.rssi} $safeName $safeAddr")
+
+            // De-dup by address if we have one
+            runOnUiThread {
+                val idx = when {
+                    safeAddr != "Permission required" ->
+                        deviceRows.indexOfFirst { it.address == safeAddr }
+                    else ->
+                        deviceRows.indexOfFirst { it.name == safeName }
+                }
+
+                if (idx >= 0) {
+                    // Update name if it improved from "(Unnamed)" to something fr
+                    val existing = deviceRows[idx]
+                    val newName = if (existing.name == "(Unnamed)" && safeName != "(Unnamed)") safeName else existing.name
+                    val newAddr = if (existing.address == "Permission required" && safeAddr != "Permission required") safeAddr else existing.address
+                    if (newName != existing.name || newAddr != existing.address) {
+                        deviceRows[idx] = existing.copy(name = newName, address = newAddr)
+                    }
+                } else {
+                    deviceRows.add(DeviceRow(name = safeName, address = safeAddr))
+                }
             }
-            if (!already) runOnUiThread { devices.add(dev) }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -106,11 +127,9 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Init BT
         bluetoothManager = getSystemService(BluetoothManager::class.java)
         bluetoothAdapter = bluetoothManager.adapter
 
@@ -127,29 +146,29 @@ class ComposeMainActivity : ComponentActivity() {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_LONG).show()
             finish(); return
         }
-        // Only read isEnabled after we have CONNECT perm on Android 12+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || adapter.isEnabled) {
-            setContent { Application(
-                devices = devices,
-                onEnableBt = { promptEnableBluetooth() },
-                onScanToggle = { scanLeDevice() }
-            ) }
+            setContent {
+                Application(
+                    devices = deviceRows,               // rows with names
+                    onEnableBt = { promptEnableBluetooth() },
+                    onScanToggle = { scanLeDevice() }
+                )
+            }
         } else {
-            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(intent)
+            enableBluetoothLauncher.launch(android.content.Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         }
     }
 
-    // BLE Helper functions
+    // BLE helper functions
     private fun promptEnableBluetooth() {
         val adapter = bluetoothAdapter
         if (adapter != null && !adapter.isEnabled) {
-            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(intent)
+            enableBluetoothLauncher.launch(android.content.Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         } else {
             Toast.makeText(this, "Bluetooth already enabled", Toast.LENGTH_SHORT).show()
         }
     }
+
     private fun scanLeDevice() {
         addLog(
             "scanLeDevice(): sdk=${Build.VERSION.SDK_INT} " +
@@ -158,8 +177,7 @@ class ComposeMainActivity : ComponentActivity() {
                     "btOn=${bluetoothAdapter?.isEnabled == true}"
         )
         if (!scanning) {
-            // clear list and schedule auto-stop
-            devices.clear()
+            deviceRows.clear()
             handler.postDelayed({
                 scanning = false
                 stopScanSafe()
@@ -192,7 +210,6 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
-
     @SuppressLint("MissingPermission")
     private fun stopScanSafe() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBtPermissions()) {
@@ -207,7 +224,6 @@ class ComposeMainActivity : ComponentActivity() {
             addLog("stopScanSafe: SecurityException ${e.message}")
         }
     }
-
 
     @SuppressLint("MissingPermission")
     private fun connectToDevice(device: BluetoothDevice) {

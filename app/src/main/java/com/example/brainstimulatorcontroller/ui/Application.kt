@@ -1,6 +1,5 @@
 package com.example.brainstimulatorcontroller.ui
 
-import android.bluetooth.BluetoothDevice
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,11 +7,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.brainstimulatorcontroller.DeviceRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Application(
-    devices: List<BluetoothDevice>,
+    devices: List<DeviceRow>,       // now rows with name + address
     onEnableBt: () -> Unit,
     onScanToggle: () -> Unit
 ) {
@@ -32,7 +32,7 @@ fun Application(
 
 @Composable
 fun AppContent(
-    devices: List<BluetoothDevice>,
+    devices: List<DeviceRow>,
     onEnableBt: () -> Unit,
     onScanToggle: () -> Unit,
     modifier: Modifier = Modifier
@@ -94,14 +94,22 @@ fun AppContent(
         Divider()
 
         Text("Devices", style = MaterialTheme.typography.titleMedium)
+
+        // Show device NAME (primary) and ADDRESS (secondary)
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(devices) { dev ->
+            items(
+                items = devices,
+                key = { it.address.ifBlank { it.name } }  // stable enough for list rendering
+            ) { row ->
                 ElevatedCard {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(dev.address, style = MaterialTheme.typography.bodySmall)
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(row.name, style = MaterialTheme.typography.bodyLarge)
+                        if (row.address.isNotBlank()) {
+                            Text(row.address, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
