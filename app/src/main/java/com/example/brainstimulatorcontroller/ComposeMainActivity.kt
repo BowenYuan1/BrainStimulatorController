@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -124,6 +125,28 @@ class ComposeMainActivity : ComponentActivity() {
 
         override fun onScanFailed(errorCode: Int) {
             addLog("onScanFailed: code=$errorCode") // 1=ALREADY_STARTED, 2=REGISTRATION_FAILED, 5=INTERNAL_ERROR, 6=FEATURE_UNSUPPORTED
+        }
+    }
+    private val gattCallback = object : BluetoothGattCallback() {
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.d("BLE_GATT", "Connected to ${gatt.device.address}")
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.d("BLE_GATT", "Disconnected from ${gatt.device.address}")
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                for (service in gatt.services) {
+                    Log.d("BLE_GATT", "Service: ${service.uuid}")
+                    for (chara in service.characteristics) {
+                        Log.d("BLE_GATT", "  Char: ${chara.uuid}")
+                    }
+                }
+            }
         }
     }
 
