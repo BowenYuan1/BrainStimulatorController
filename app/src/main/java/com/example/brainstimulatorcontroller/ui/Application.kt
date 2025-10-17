@@ -19,14 +19,14 @@ fun Application(
     onScanToggle: () -> Unit,
     onDeviceClick: (DeviceRow) -> Unit,
     onSendSet: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
-    onStart: (phase: Int) -> Unit,
+    onStart: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
     onStop: (phase: Int) -> Unit,
     logs: List<String>,
 ) {
 
     MaterialTheme {
         Scaffold(
-            topBar = { TopAppBar(title = { Text("Brain Stimulator Sample Application") }) }
+            topBar = { TopAppBar(title = { Text("Brain Stimulator Controller") }) }
         ) { inner ->
             AppContent(
                 devices = devices,
@@ -52,7 +52,7 @@ private fun AppContent(
     onScanToggle: () -> Unit,
     onDeviceClick: (DeviceRow) -> Unit,
     onSendSet: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
-    onStart: (phase: Int) -> Unit,
+    onStart: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
     onStop: (phase: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -134,14 +134,14 @@ private fun AppContent(
             Button(
                 enabled = inputsOk,
                 onClick = {
-                    onSendSet(phase!!, currentMA, freqHz!!)
+                    onSendSet(phase!!, currentMA, freqHz!!) // When pressed set data
                 }
-            ) { Text("Send SET") }
+            ) { Text("Send SET (Modify Instruction)") }
 
             Button(
                 enabled = phaseOk,
                 onClick = {
-                    onStart(phase!!)
+                    onStart(phase!!, currentMA, freqHz!!)
                 }
             ) { Text("START") }
 

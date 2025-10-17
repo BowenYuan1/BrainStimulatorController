@@ -105,11 +105,11 @@ class ComposeMainActivity : ComponentActivity() {
                 ((f and 0xFFFF) shl 16)
     }
 
+    // Checks if the peripheral is available for data transfer
     private fun findTxCharacteristic(gatt: BluetoothGatt): BluetoothGattCharacteristic? {
-        // Preferred path: known service/char UUIDs
         gatt.getService(SERVICE_UUID)?.getCharacteristic(TX_CHARACTERISTIC_UUID)?.let { return it }
 
-        // Fallback: search any service for a writable characteristic
+        // search any service for a writable characteristic
         for (svc in gatt.services) {
             for (ch in svc.characteristics) {
                 val props = ch.properties
@@ -121,12 +121,12 @@ class ComposeMainActivity : ComponentActivity() {
         return null
     }
 
-    private fun makePayload256(channel: Int, currentMA: Float, freqHz: Int): ByteArray {
+    private fun makePayload256(phase: Int, currentMA: Float, freqHz: Int): ByteArray {
         val out = ByteArray(32)
-        val ch = channel.coerceIn(0, 255)
+        val ph = phase.coerceIn(0, 255)
         val i10 = (currentMA * 10f).toInt().coerceIn(0, 255)
         val f   = freqHz.coerceIn(0, 0xFFFF)
-        out[0] = ch.toByte()
+        out[0] = ph.toByte()
         out[1] = i10.toByte()
         out[2] = (f and 0xFF).toByte()
         out[3] = ((f shr 8) and 0xFF).toByte()
@@ -134,7 +134,7 @@ class ComposeMainActivity : ComponentActivity() {
         return out
     }
 
-    private fun makeChannelOnlyPayload256(channel: Int): ByteArray {
+    private fun makeBlankPayload256(channel: Int): ByteArray {
         val out = ByteArray(32)
         out[0] = (channel and 0xFF).toByte()
         return out
@@ -160,6 +160,7 @@ class ComposeMainActivity : ComponentActivity() {
         return out
     }
 
+    // Write to the BLE device
     @SuppressLint("MissingPermission")
     private fun writeToPeripheral(bytes: ByteArray): Any {
         val gatt = bluetoothGatt ?: run {
@@ -221,16 +222,16 @@ class ComposeMainActivity : ComponentActivity() {
                         }
                     },
                     onSendSet = { phase, ma, hz ->
-                        sendSetCommand(phase, ma, hz)      // <- uses phase now
-                        uiLog("Send SET phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                        sendSetCommand(phase, ma, hz)
+                        uiLog("Send SET(Modify) phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
                     },
-                    onStart = { phase ->
-                        sendStartCommand(phase)
-                        uiLog("Send START phase=$phase")
+                    onStart = { phase, ma, hz ->
+                        sendStartCommand(phase, ma, hz)
+                        uiLog("Send START phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
                     },
                     onStop = { phase ->
                         sendStopCommand(phase)
-                        uiLog("Send STOP phase=$phase")
+                        uiLog("Send STOP")
                     },
                     logs = uiLogs
                 )
@@ -246,8 +247,6 @@ class ComposeMainActivity : ComponentActivity() {
     private val deviceRows = mutableStateListOf<DeviceRow>()
 
     private var bluetoothGatt: BluetoothGatt? = null
-    //private val gattCallback = object : BluetoothGattCallback() {  }
-
     private val leScanCallback = object : ScanCallback() {
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -296,6 +295,7 @@ class ComposeMainActivity : ComponentActivity() {
     private val gattCallback = object : BluetoothGattCallback() {
         @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        // Checks with Gatt server if theres a connection change, logs status in UI and internal log
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLE_GATT", "Connected to ${gatt.device.address}")
@@ -306,7 +306,7 @@ class ComposeMainActivity : ComponentActivity() {
                 uiLog("Disconnected: ${gatt.device.name}")
             }
         }
-
+        // Logs all devices within internal log, theres a lot
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 for (service in gatt.services) {
@@ -319,6 +319,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    // Onstart, it initializes the bluetooth adapter and manager.
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -352,16 +353,16 @@ class ComposeMainActivity : ComponentActivity() {
                         }
                     },
                     onSendSet = { phase, ma, hz ->
-                        sendSetCommand(phase, ma, hz)      // <- uses phase now
-                        uiLog("Send SET phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                        sendSetCommand(phase, ma, hz)
+                        uiLog("Send SET(Modify) phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
                     },
-                    onStart = { phase ->
-                        sendStartCommand(phase)
-                        uiLog("Send START phase=$phase")
+                    onStart = { phase, ma, hz ->
+                        sendStartCommand(phase, ma, hz)
+                        uiLog("Send START phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
                     },
                     onStop = { phase ->
                         sendStopCommand(phase)
-                        uiLog("Send STOP phase=$phase")
+                        uiLog("Send STOP")
                     },
                     logs = uiLogs,
                 )
@@ -382,6 +383,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    // BLE device scanner
     private fun scanLeDevice() {
         addLog(
             "scanLeDevice(): sdk=${Build.VERSION.SDK_INT} " +
@@ -403,20 +405,23 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
-    fun sendSetCommand(channel: Int, currentMA: Float, freqHz: Int) {
-        val payload = makePayload256(channel, currentMA, freqHz)
+    // Modifies the instructions
+    fun sendSetCommand(phase: Int, currentMA: Float, freqHz: Int) {
+        val payload = makePayload256(phase, currentMA, freqHz)
         val pkt = buildPacket(CMD_SET, payload)
         writeToPeripheral(pkt)
     }
 
-    fun sendStartCommand(channel: Int) {
-        val payload = makeChannelOnlyPayload256(channel)
+    // Sends the start cmd and then it also sends the initial data
+    fun sendStartCommand(phase: Int, currentMA: Float, freqHz: Int) {
+        val payload = makePayload256(phase, currentMA, freqHz)
         val pkt = buildPacket(CMD_START, payload)
         writeToPeripheral(pkt)
     }
 
-    fun sendStopCommand(channel: Int) {
-        val payload = makeChannelOnlyPayload256(channel)
+    // Sends stop command and a "payload"
+    fun sendStopCommand(phase: Int) {
+        val payload = makeBlankPayload256(phase)
         val pkt = buildPacket(CMD_STOP, payload)
         writeToPeripheral(pkt)
     }
