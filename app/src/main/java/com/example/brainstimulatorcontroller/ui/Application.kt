@@ -18,10 +18,12 @@ fun Application(
     onEnableBt: () -> Unit,
     onScanToggle: () -> Unit,
     onDeviceClick: (DeviceRow) -> Unit,
-    onSendSet: (channel: Int, currentMA: Float, freqHz: Int) -> Unit,
-    onStart: (channel: Int) -> Unit,
-    onStop: (channel: Int) -> Unit,
+    onSendSet: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
+    onStart: (phase: Int) -> Unit,
+    onStop: (phase: Int) -> Unit,
+    logs: List<String>,
 ) {
+
     MaterialTheme {
         Scaffold(
             topBar = { TopAppBar(title = { Text("Brain Stimulator Sample Application") }) }
@@ -34,52 +36,84 @@ fun Application(
                 onSendSet = onSendSet,
                 onStart = onStart,
                 onStop = onStop,
-                modifier = Modifier.padding(inner).fillMaxSize()
+                modifier = Modifier.padding(inner).fillMaxSize(),
+                logs = logs
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppContent(
     devices: List<DeviceRow>,
+    logs: List<String>,
     onEnableBt: () -> Unit,
     onScanToggle: () -> Unit,
     onDeviceClick: (DeviceRow) -> Unit,
-    onSendSet: (channel: Int, currentMA: Float, freqHz: Int) -> Unit,
-    onStart: (channel: Int) -> Unit,
-    onStop: (channel: Int) -> Unit,
+    onSendSet: (phase: Int, currentMA: Float, freqHz: Int) -> Unit,
+    onStart: (phase: Int) -> Unit,
+    onStop: (phase: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var channelText by remember { mutableStateOf("1") }
+    var phaseText by remember { mutableStateOf("0") }
     var currentMA by remember { mutableStateOf(2.5f) }
     var freqText by remember { mutableStateOf("1000") }
-    var logs by remember { mutableStateOf(listOf<String>()) }
 
-    fun log(line: String) { logs = listOf(line) + logs.take(100) }
+    var presetExpanded by remember { mutableStateOf(false) }
+    var selectedPresetLabel by remember { mutableStateOf("Choose preset") }
 
     // Parse inputs
-    val channel = channelText.toIntOrNull()
+    val phase = phaseText.toIntOrNull()
     val freqHz = freqText.toIntOrNull()
-
-    val channelOk = channel != null && channel in 0..9
+    data class Preset(val label: String, val phase: Int, val currentMA: Float, val freqHz: Int)
+    val presets = listOf(
+        Preset("Tingle (low)", phase = 0, currentMA = 0.5f, freqHz = 10),
+        Preset("Stim (moderate)", phase = 30, currentMA = 2.0f, freqHz = 100),
+        Preset("Stim (high)", phase = 60, currentMA = 3.5f, freqHz = 1000),
+        Preset("Custom baseline", phase = 0, currentMA = 1.0f, freqHz = 500)
+    )
+    val phaseOk = phase != null && phase in 0..90
     val freqOk = freqHz != null && freqHz in 1..20000
-    val inputsOk = channelOk && freqOk
+    val inputsOk = phaseOk && freqOk
 
     Column(modifier = modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Controls", style = MaterialTheme.typography.titleMedium)
-
+        ExposedDropdownMenuBox(expanded = presetExpanded, onExpandedChange = { presetExpanded = !presetExpanded }) {
+            OutlinedTextField(
+                readOnly = true,
+                value = selectedPresetLabel,
+                onValueChange = {},
+                label = { Text("Presets") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = presetExpanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(expanded = presetExpanded, onDismissRequest = { presetExpanded = false }) {
+                presets.forEach { p ->
+                    DropdownMenuItem(
+                        text = { Text(p.label) },
+                        onClick = {
+                            phaseText = p.phase.toString()
+                            currentMA = p.currentMA
+                            freqText = p.freqHz.toString()
+                            selectedPresetLabel = p.label
+                            presetExpanded = false
+                        }
+                    )
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
-                value = channelText,
-                onValueChange = { channelText = it.filter { ch -> ch.isDigit() }.take(1) },
-                label = { Text("Channel") },
+                value = phaseText,
+                onValueChange = { phaseText = it.filter { phase -> phase.isDigit() }.take(1) },
+                label = { Text("Phase Control (degrees)") },
                 modifier = Modifier.width(120.dp),
-                isError = !channelOk
+                isError = !phaseOk
             )
             OutlinedTextField(
                 value = freqText,
-                onValueChange = { freqText = it.filter { ch -> ch.isDigit() }.take(5) },
+                onValueChange = { freqText = it.filter { phase -> phase.isDigit() }.take(5) },
                 label = { Text("Frequency (Hz)") },
                 modifier = Modifier.width(180.dp),
                 isError = !freqOk
@@ -100,24 +134,21 @@ private fun AppContent(
             Button(
                 enabled = inputsOk,
                 onClick = {
-                    onSendSet(channel!!, currentMA, freqHz!!)
-                    log("TX: SET ch=$channel I=${"%.1f".format(currentMA)}mA f=$freqHz Hz")
+                    onSendSet(phase!!, currentMA, freqHz!!)
                 }
             ) { Text("Send SET") }
 
             Button(
-                enabled = channelOk,
+                enabled = phaseOk,
                 onClick = {
-                    onStart(channel!!)
-                    log("TX: START ch=$channel")
+                    onStart(phase!!)
                 }
             ) { Text("START") }
 
             Button(
-                enabled = channelOk,
+                enabled = phaseOk,
                 onClick = {
-                    onStop(channel!!)
-                    log("TX: STOP ch=$channel")
+                    onStop(phase!!)
                 }
             ) { Text("STOP") }
         }
@@ -160,6 +191,8 @@ private fun AppContent(
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) { items(logs) { Text(it) } }
+        ) {
+            items(logs) { Text(it) }
+        }
     }
 }

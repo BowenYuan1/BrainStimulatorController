@@ -20,10 +20,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.mutableStateListOf
 import androidx.core.content.ContextCompat
 import com.example.brainstimulatorcontroller.ui.Application
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 
@@ -57,7 +61,17 @@ class ComposeMainActivity : ComponentActivity() {
     private fun addLog(msg: String) = Log.d(TAG, msg)
     private fun hasPerm(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+    private val uiLogs = mutableStateListOf<String>()
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    private fun uiLog(msg: String) {
+        val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+        runOnUiThread {
+            // prepend newest
+            uiLogs.add(0, msg)
+            if (uiLogs.size > 200) uiLogs.removeLast()
+        }
+    }
     private val btPerms = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
         Manifest.permission.BLUETOOTH_CONNECT
@@ -181,6 +195,7 @@ class ComposeMainActivity : ComponentActivity() {
         } as Boolean
     }
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             val allGranted = results.values.all { it }
@@ -191,17 +206,33 @@ class ComposeMainActivity : ComponentActivity() {
             }
         }
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
             setContent {
                 Application(
-                    devices = deviceRows,               // <-- pass rows with names
+                    devices = deviceRows,
                     onEnableBt = { promptEnableBluetooth() },
                     onScanToggle = { scanLeDevice() },
-                    onDeviceClick = TODO(),
-                    onSendSet = TODO(),
-                    onStart = TODO(),
-                    onStop = TODO()
+                    onDeviceClick = { row ->
+                        devicesByAddr[row.address]?.let {
+                            connectToDevice(it)
+                            uiLog("Connecting to ${row.name}")
+                        }
+                    },
+                    onSendSet = { phase, ma, hz ->
+                        sendSetCommand(phase, ma, hz)      // <- uses phase now
+                        uiLog("Send SET phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                    },
+                    onStart = { phase ->
+                        sendStartCommand(phase)
+                        uiLog("Send START phase=$phase")
+                    },
+                    onStop = { phase ->
+                        sendStopCommand(phase)
+                        uiLog("Send STOP phase=$phase")
+                    },
+                    logs = uiLogs
                 )
             }
         }
@@ -263,13 +294,16 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
     private val gattCallback = object : BluetoothGattCallback() {
+        @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLE_GATT", "Connected to ${gatt.device.address}")
+                uiLog("Connected: ${gatt.device.name}")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d("BLE_GATT", "Disconnected from ${gatt.device.address}")
+                uiLog("Disconnected: ${gatt.device.name}")
             }
         }
 
@@ -285,6 +319,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -298,6 +333,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private fun afterPermissionsGranted() {
         val adapter = bluetoothAdapter
         if (adapter == null) {
@@ -311,11 +347,23 @@ class ComposeMainActivity : ComponentActivity() {
                     onEnableBt = { promptEnableBluetooth() },
                     onScanToggle = { scanLeDevice() },
                     onDeviceClick = { row ->
-                        devicesByAddr[row.address]?.let { connectToDevice(it) }
+                        devicesByAddr[row.address]?.let { connectToDevice(it)
+                        uiLog("Connecting to ${row.name}")
+                        }
                     },
-                    onSendSet = { ch, ma, hz -> sendSetCommand(ch, ma, hz) },
-                    onStart = { ch -> sendStartCommand(ch) },
-                    onStop  = { ch -> sendStopCommand(ch) }
+                    onSendSet = { phase, ma, hz ->
+                        sendSetCommand(phase, ma, hz)      // <- uses phase now
+                        uiLog("Send SET phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                    },
+                    onStart = { phase ->
+                        sendStartCommand(phase)
+                        uiLog("Send START phase=$phase")
+                    },
+                    onStop = { phase ->
+                        sendStopCommand(phase)
+                        uiLog("Send STOP phase=$phase")
+                    },
+                    logs = uiLogs,
                 )
             }
         } else {
@@ -324,6 +372,7 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     // BLE helper functions
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private fun promptEnableBluetooth() {
         val adapter = bluetoothAdapter
         if (adapter != null && !adapter.isEnabled) {
