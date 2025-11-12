@@ -63,6 +63,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.text)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation("androidx.compose.ui:ui-tooling")
