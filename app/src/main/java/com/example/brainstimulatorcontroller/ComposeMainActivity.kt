@@ -122,15 +122,25 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun makePayload64(phase: Int, currentMA: Float, freqHz: Int): ByteArray {
-        val out = ByteArray(PAYLOAD_LEN_BYTES)
-        val ph = phase.coerceIn(0, 255)
-        val i10 = (currentMA * 10f).toInt().coerceIn(0, 255)
-        val f   = freqHz.coerceIn(0, 0xFFFF)
-        out[0] = ph.toByte()
-        out[1] = i10.toByte()
-        out[2] = (f and 0xFF).toByte()
-        out[3] = ((f shr 8) and 0xFF).toByte()
-        // bytes 4..31 left as 0
+        val out = ByteArray(8)
+
+        // Scale and constrain to field widths
+        val ph21  = phase and ((1 shl 21) - 1)          // 21 bits
+        val fr22  = freqHz and ((1 shl 22) - 1)         // 22 bits
+        val cur21 = ((currentMA * 10f).toInt()) and ((1 shl 21) - 1) // 21 bits current in 0.1 mA
+
+        // Pack into a 64-bit big-endian value
+        val packed: Long =
+            (ph21.toLong() shl 43) or    // bits 63..43
+                    (fr22.toLong() shl 21) or    // bits 42..21
+                    cur21.toLong()               // bits 20..0
+
+        // Emit as 8 bytes MSB first
+        for (i in 0 until 8) {
+            val shift = (7 - i) * 8
+            out[i] = ((packed ushr shift) and 0xFF).toByte()
+        }
+
         return out
     }
 
@@ -152,25 +162,37 @@ class ComposeMainActivity : ComponentActivity() {
             Log.w("BLE_GATT", "TX characteristic not found")
             return false
         }
+
+        // Prepend 0xAA as a start marker for the FPGA
+        val framed = ByteArray(bytes.size + 1)
+        framed[0] = 0xAA.toByte()
+        System.arraycopy(bytes, 0, framed, 1, bytes.size)
+
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                Log.d("BLE_TX", "TX ${bytes.size}B: " + bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) })
+                Log.d("BLE_TX", "TX ${framed.size}B: " +
+                        framed.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) })
+
                 val writeType =
                     if ((ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0)
                         BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
                     else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                val ok = gatt.writeCharacteristic(ch, bytes, writeType)
-                Log.d("BLE_GATT", "writeCharacteristic(T+) ok=$ok len=${bytes.size}")
+
+                val ok = gatt.writeCharacteristic(ch, framed, writeType)
+                Log.d("BLE_GATT", "writeCharacteristic(T+) ok=$ok len=${framed.size}")
                 ok
             } else {
-                Log.d("BLE_TX", "TX ${bytes.size}B: " + bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) })
+                Log.d("BLE_TX", "TX ${framed.size}B: " +
+                        framed.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) })
+
                 ch.writeType =
                     if ((ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0)
                         BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
                     else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                ch.value = bytes
+
+                ch.value = framed
                 val ok = gatt.writeCharacteristic(ch)
-                Log.d("BLE_GATT", "writeCharacteristic legacy ok=$ok len=${bytes.size}")
+                Log.d("BLE_GATT", "writeCharacteristic legacy ok=$ok len=${framed.size}")
                 ok
             }
         } catch (t: Throwable) {
