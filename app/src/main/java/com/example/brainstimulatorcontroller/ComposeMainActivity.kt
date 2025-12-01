@@ -31,9 +31,15 @@ import com.example.brainstimulatorcontroller.ui.Application
 import java.util.UUID
 
 
-private const val CMD_SET: UByte   = 0x01u
-private const val CMD_START: UByte = 0x02u
-private const val CMD_STOP: UByte  = 0x03u
+
+// CMD field (4 bits) values – must match your FPGA
+private const val CMD0_SET_FREQ: UByte   = 0x00u
+private const val CMD1_CONFIG: UByte     = 0x01u
+private const val CMD2_SET_ON: UByte     = 0x02u
+private const val CMD3_SET_OFF: UByte    = 0x03u
+private const val CMD4_ENABLE: UByte     = 0x04u
+private const val CMD5_DISABLE: UByte    = 0x05u
+
 
 // Packet framing
 private const val START_BYTE: UByte = 0xAAu
@@ -96,14 +102,6 @@ class ComposeMainActivity : ComponentActivity() {
             }
         } else true
     }
-    private fun makePayload(channel: Int, currentMA: Float, freqHz: Int): Int {
-        val ch = channel.coerceIn(0, 255)
-        val i10 = (currentMA * 10f).toInt().coerceIn(0, 255)
-        val f   = freqHz.coerceIn(0, 0xFFFF)
-        return (ch and 0xFF) or
-                ((i10 and 0xFF) shl 8) or
-                ((f and 0xFFFF) shl 16)
-    }
 
     private fun findTxCharacteristic(gatt: BluetoothGatt): BluetoothGattCharacteristic? {
         // Preferred path: known service/char UUIDs
@@ -121,21 +119,31 @@ class ComposeMainActivity : ComponentActivity() {
         return null
     }
 
-    private fun makePayload64(phase: Int, currentMA: Float, freqHz: Int): ByteArray {
+    private fun makePayload64(
+        phase: Int,
+        currentMA: Float,
+        freqHz: Int,
+        waveform: Int  // 0 = sine, 1 = triangle, etc.
+    ): ByteArray {
         val out = ByteArray(8)
 
-        // Scale and constrain to field widths
-        val ph21  = phase and ((1 shl 21) - 1)          // 21 bits
-        val fr22  = freqHz and ((1 shl 22) - 1)         // 22 bits
-        val cur21 = ((currentMA * 10f).toInt()) and ((1 shl 21) - 1) // 21 bits current in 0.1 mA
+        val ph21  = phase and ((1 shl 21) - 1)                 // 21 bits
+        val wf2   = waveform and 0x3                           // 2 bits  (0..3)
+        val fr20  = freqHz and ((1 shl 20) - 1)                // 20 bits
+        val cur21 = ((currentMA * 10f).toInt()) and ((1 shl 21) - 1) // 21 bits, 0.1 mA units
 
-        // Pack into a 64-bit big-endian value
+        // Pack into 64 bits:
+        // [63:43] phase (21)
+        // [42:41] waveform (2)
+        // [40:21] frequency (20)
+        // [20:0]  current (21)
         val packed: Long =
-            (ph21.toLong() shl 43) or    // bits 63..43
-                    (fr22.toLong() shl 21) or    // bits 42..21
-                    cur21.toLong()               // bits 20..0
+            (ph21.toLong() shl 43) or     // phase
+                    (wf2.toLong()  shl 41) or     // waveform
+                    (fr20.toLong() shl 21) or     // frequency
+                    cur21.toLong()                // current
 
-        // Emit as 8 bytes MSB first
+        // Emit as 8 bytes, MSB first
         for (i in 0 until 8) {
             val shift = (7 - i) * 8
             out[i] = ((packed ushr shift) and 0xFF).toByte()
@@ -167,6 +175,7 @@ class ComposeMainActivity : ComponentActivity() {
         val framed = ByteArray(bytes.size + 1)
         framed[0] = 0xAA.toByte()
         System.arraycopy(bytes, 0, framed, 1, bytes.size)
+        framed[framed.size - 1] = END_BYTE.toByte()  // 0x55
 
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -226,17 +235,43 @@ class ComposeMainActivity : ComponentActivity() {
                             uiLog("Connecting to ${row.name}")
                         }
                     },
-                    onSendSet = { phase, ma, hz ->
-                        sendSetCommand(phase, ma, hz)
-                        uiLog("Send SET(Modify) phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                    // CMD0 – Set frequency
+                    onSetFrequency = { channelsMask, freqHz ->
+                        sendSetFrequency(channelsMask, freqHz)
+                        uiLog("CMD0: Set frequency=$freqHz Hz, mask=${channelsMask.toString(2).padStart(4, '0')}")
                     },
-                    onStart = { phase, ma, hz ->
-                        sendStartCommand(phase, ma, hz)
-                        uiLog("Send START phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+
+                    // CMD1 – Phase / Waveform / Amplitude
+                    onSendSet = { channelsMask, phase, ma, waveform ->
+                        sendConfigCommand(channelsMask, phase, ma, waveform)
+                        uiLog(
+                            "CMD1: Config mask=${channelsMask.toString(2).padStart(4, '0')} " +
+                                    "phase=$phase°, I=${"%.1f".format(ma)} mA, wf=$waveform"
+                        )
                     },
-                    onStop = { phase ->
-                        sendStopCommand(phase)
-                        uiLog("Send STOP")
+
+                    // CMD2 – On counter
+                    onSetOnCounter = { channelsMask, rampUp ->
+                        sendOnCounter(channelsMask, rampUp)
+                        uiLog("CMD2: On-counter=$rampUp, mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD3 – Off counter
+                    onSetOffCounter = { channelsMask, rampDown ->
+                        sendOffCounter(channelsMask, rampDown)
+                        uiLog("CMD3: Off-counter=$rampDown, mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD4 – Enable
+                    onStart = { channelsMask ->
+                        sendEnableChannels(channelsMask)
+                        uiLog("CMD4: ENABLE mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD5 – Disable
+                    onStop = { channelsMask ->
+                        sendDisableChannels(channelsMask)
+                        uiLog("CMD5: DISABLE mask=${channelsMask.toString(2).padStart(4, '0')}")
                     },
                     logs = uiLogs
                 )
@@ -355,17 +390,43 @@ class ComposeMainActivity : ComponentActivity() {
                             uiLog("Connecting to ${row.name}")
                         }
                     },
-                    onSendSet = { phase, ma, hz ->
-                        sendSetCommand(phase, ma, hz)
-                        uiLog("Send SET(Modify) phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+                    // CMD0 – Set frequency
+                    onSetFrequency = { channelsMask, freqHz ->
+                        sendSetFrequency(channelsMask, freqHz)
+                        uiLog("CMD0: Set frequency=$freqHz Hz, mask=${channelsMask.toString(2).padStart(4, '0')}")
                     },
-                    onStart = { phase, ma, hz ->
-                        sendStartCommand(phase, ma, hz)
-                        uiLog("Send START phase=$phase I=${"%.1f".format(ma)}mA f=$hz Hz")
+
+                    // CMD1 – Phase / Waveform / Amplitude
+                    onSendSet = { channelsMask, phase, ma, waveform ->
+                        sendConfigCommand(channelsMask, phase, ma, waveform)
+                        uiLog(
+                            "CMD1: Config mask=${channelsMask.toString(2).padStart(4, '0')} " +
+                                    "phase=$phase°, I=${"%.1f".format(ma)} mA, wf=$waveform"
+                        )
                     },
-                    onStop = { phase ->
-                        sendStopCommand(phase)
-                        uiLog("Send STOP")
+
+                    // CMD2 – On counter
+                    onSetOnCounter = { channelsMask, rampUp ->
+                        sendOnCounter(channelsMask, rampUp)
+                        uiLog("CMD2: On-counter=$rampUp, mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD3 – Off counter
+                    onSetOffCounter = { channelsMask, rampDown ->
+                        sendOffCounter(channelsMask, rampDown)
+                        uiLog("CMD3: Off-counter=$rampDown, mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD4 – Enable
+                    onStart = { channelsMask ->
+                        sendEnableChannels(channelsMask)
+                        uiLog("CMD4: ENABLE mask=${channelsMask.toString(2).padStart(4, '0')}")
+                    },
+
+                    // CMD5 – Disable
+                    onStop = { channelsMask ->
+                        sendDisableChannels(channelsMask)
+                        uiLog("CMD5: DISABLE mask=${channelsMask.toString(2).padStart(4, '0')}")
                     },
                     logs = uiLogs,
                 )
@@ -407,23 +468,75 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
-    fun sendSetCommand(channel: Int, currentMA: Float, freqHz: Int) {
-        val payload = makePayload64(channel, currentMA, freqHz)
-        val pkt = buildPacket(CMD_SET, channel, payload)
+    // CMD 0x0 – Set Frequencies (freq field used, others ignored)
+    fun sendSetFrequency(channelsMask: Int, freqHz: Int) {
+        val payload = makePayload64(
+            phase    = 0,
+            currentMA = 0f,
+            freqHz   = freqHz,
+            waveform = 0   // sine by default; hardware can ignore
+        )
+        val pkt = buildPacket(CMD0_SET_FREQ, channelsMask, payload)
         writeToPeripheral(pkt)
     }
 
-    fun sendStartCommand(channel: Int, ma: Float, hz: Int) {
-        val payload = makeBlankPayload64(channel)
-        val pkt = buildPacket(CMD_START, channel, payload)
+    // CMD 0x1 – Configuration (Phase, Waveform, Amplitude)
+    fun sendConfigCommand(
+        channelsMask: Int,
+        phase: Int,
+        currentMA: Float,
+        waveform: Int
+    ) {
+        val payload = makePayload64(
+            phase    = phase,
+            currentMA = currentMA,
+            freqHz   = 0,          // freq set by CMD0, this field ignored
+            waveform = waveform
+        )
+        val pkt = buildPacket(CMD1_CONFIG, channelsMask, payload)
         writeToPeripheral(pkt)
     }
 
-    fun sendStopCommand(channel: Int) {
-        val payload = makeBlankPayload64(channel)
-        val pkt = buildPacket(CMD_STOP, channel, payload)
+    // CMD 0x2 – Set ON Counter (triangle only) – uses frequency field
+    fun sendOnCounter(channelsMask: Int, rampUp: Long) {
+        val ramp = (rampUp and ((1L shl 20) - 1))   // clamp to 20 bits
+        val payload = makePayload64(
+            phase    = 0,
+            currentMA = 0f,
+            freqHz   = ramp.toInt(),   // goes into [40:21] as per doc
+            waveform = 1               // triangle (for clarity; HW may ignore)
+        )
+        val pkt = buildPacket(CMD2_SET_ON, channelsMask, payload)
         writeToPeripheral(pkt)
     }
+
+    // CMD 0x3 – Set OFF Counter (triangle only) – also uses frequency field
+    fun sendOffCounter(channelsMask: Int, rampDown: Long) {
+        val ramp = (rampDown and ((1L shl 20) - 1))
+        val payload = makePayload64(
+            phase    = 0,
+            currentMA = 0f,
+            freqHz   = ramp.toInt(),
+            waveform = 1
+        )
+        val pkt = buildPacket(CMD3_SET_OFF, channelsMask, payload)
+        writeToPeripheral(pkt)
+    }
+
+    // CMD 0x4 – Enable channel(s) – payload ignored
+    fun sendEnableChannels(channelsMask: Int) {
+        val payload = ByteArray(PAYLOAD_LEN_BYTES) { 0 }
+        val pkt = buildPacket(CMD4_ENABLE, channelsMask, payload)
+        writeToPeripheral(pkt)
+    }
+
+    // CMD 0x5 – Disable channel(s) – payload ignored
+    fun sendDisableChannels(channelsMask: Int) {
+        val payload = ByteArray(PAYLOAD_LEN_BYTES) { 0 }
+        val pkt = buildPacket(CMD5_DISABLE, channelsMask, payload)
+        writeToPeripheral(pkt)
+    }
+
 
     @SuppressLint("MissingPermission")
     private fun startScanSafe() {
