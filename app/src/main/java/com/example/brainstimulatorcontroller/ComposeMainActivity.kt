@@ -172,7 +172,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
 
         // Prepend 0xAA as a start marker for the FPGA
-        val framed = ByteArray(bytes.size + 1)
+        val framed = ByteArray(bytes.size + 2)
         framed[0] = 0xAA.toByte()
         System.arraycopy(bytes, 0, framed, 1, bytes.size)
         framed[framed.size - 1] = END_BYTE.toByte()  // 0x55
