@@ -336,13 +336,16 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
     private val gattCallback = object : BluetoothGattCallback() {
+        @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLE_GATT", "Connected to ${gatt.device.address}")
+                uiLog("Connected to ${gatt.device.name ?: gatt.device.address}")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d("BLE_GATT", "Disconnected from ${gatt.device.address}")
+                uiLog("Disconnected from ${gatt.device.name ?: gatt.device.address}")
             }
         }
 
