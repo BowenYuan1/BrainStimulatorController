@@ -123,10 +123,10 @@ private fun AppContent(
     )
 
     val channelsMask =
-        (if (ch1) 0b1000 else 0) or
-                (if (ch2) 0b0100 else 0) or
-                (if (ch3) 0b0010 else 0) or
-                (if (ch4) 0b0001 else 0)
+        (if (ch4) 0b1000 else 0) or
+                (if (ch3) 0b0100 else 0) or
+                (if (ch2) 0b0010 else 0) or
+                (if (ch1) 0b0001 else 0)
     val channelsOk = channelsMask != 0
     val phaseOk = phase != null && phase in 0..90
     val freqOk = freqHz != null && freqHz in 1..20000

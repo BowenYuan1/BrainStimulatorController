@@ -130,7 +130,8 @@ class ComposeMainActivity : ComponentActivity() {
         val ph21  = phase and ((1 shl 21) - 1)                 // 21 bits
         val wf2   = waveform and 0x3                           // 2 bits  (0..3)
         val fr20  = freqHz and ((1 shl 20) - 1)                // 20 bits
-        val cur21 = ((currentMA * 10f).toInt()) and ((1 shl 21) - 1) // 21 bits, 0.1 mA units
+        val scaledCurrent = ((currentMA / 6f) * 65535f).toInt()
+        val cur21 = scaledCurrent and ((1 shl 21) - 1) // 21 bits, 0.1 mA units
 
         // Pack into 64 bits:
         // [63:43] phase (21)
@@ -540,7 +541,7 @@ class ComposeMainActivity : ComponentActivity() {
         writeToPeripheral(pkt)
     }
 
-
+    private var bondReceiverRegistered = false
     @SuppressLint("MissingPermission")
     private fun startScanSafe() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBtPermissions()) {
@@ -559,8 +560,13 @@ class ComposeMainActivity : ComponentActivity() {
         } catch (e: SecurityException) {
             addLog("startScanSafe: SecurityException ${e.message}")
         }
-        registerReceiver(bondReceiver, filter)
+
+        if (!bondReceiverRegistered) {
+            registerReceiver(bondReceiver, filter)
+            bondReceiverRegistered = true
+        }
     }
+
 
     @SuppressLint("MissingPermission")
     private fun stopScanSafe() {
@@ -575,8 +581,18 @@ class ComposeMainActivity : ComponentActivity() {
         } catch (e: SecurityException) {
             addLog("stopScanSafe: SecurityException ${e.message}")
         }
-        unregisterReceiver(bondReceiver)
+
+        if (bondReceiverRegistered) {
+            try {
+                unregisterReceiver(bondReceiver)
+            } catch (e: IllegalArgumentException) {
+                // In case the system already unregistered it
+                addLog("stopScanSafe: receiver already unregistered: ${e.message}")
+            }
+            bondReceiverRegistered = false
+        }
     }
+
 
     @SuppressLint("MissingPermission")
     private fun connectToDevice(device: BluetoothDevice) {
